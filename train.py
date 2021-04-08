@@ -12,13 +12,11 @@ from reid.utils.data.preprocessor import Preprocessor
 from reid.utils.data.sampler import RandomPairSampler
 from reid.utils.data import transforms as T
 from reid.utils.serialization import load_checkpoint
-#from reid.evaluators import CascadeEvaluator
-from reid.evaluators import Evaluator
+from reid.evaluators import CascadeEvaluator
 
-from pgan.options import Options
-from pgan.utils.visualizer import Visualizer
-from pgan.model import MYGANModel
-
+from fdgan.options import Options
+from fdgan.utils.visualizer import Visualizer
+from fdgan.model import FDGANModel
 
 def get_data(name, data_dir, height, width, batch_size, workers, pose_aug):
     root = osp.join(data_dir, name)
@@ -42,7 +40,7 @@ def get_data(name, data_dir, height, width, batch_size, workers, pose_aug):
                      root=dataset.images_dir, transform=test_transformer),
         batch_size=batch_size, num_workers=workers,
         shuffle=False, pin_memory=False)
-       
+
     return dataset, train_loader, test_loader
 
 def main():
@@ -51,95 +49,71 @@ def main():
 
     dataset_size = len(dataset.trainval)*4
     print('#training images = %d' % dataset_size)
-    
-    model = MYGANModel(opt)
-   
-   # print(model.size)
+
+    model = FDGANModel(opt)
     visualizer = Visualizer(opt)
 
-
-    evaluator = Evaluator(model.net_E)
-    
+    evaluator = CascadeEvaluator(
+                    torch.nn.DataParallel(model.net_E.module.base_model).cuda(),
+                    model.net_E.module.embed_model,
+                    embed_dist_fn=lambda x: F.softmax(Variable(x), dim=1).data[:, 0])
     if opt.stage!=1:
-        
         print('Test with baseline model:')
-        top1,mAP = evaluator.evaluate(test_loader, test_loader, dataset.query, dataset.gallery, dataset=opt.dataset)
+        top1, mAP = evaluator.evaluate(test_loader, dataset.query, dataset.gallery, rerank_topk=100, dataset=opt.dataset)
         message = '\n Test with baseline model:  mAP: {:5.1%}  top1: {:5.1%}\n'.format(mAP, top1)
         visualizer.print_reid_results(message)
 
     total_steps = 0
     best_mAP = 0
-    ttt=0
-    accumulation_steps=8
-    if(opt.eval):
-        print('Test done!')
-        
-    else:
-        for epoch in range(1, opt.niter + opt.niter_decay + 1):
-            epoch_start_time = time.time()
-            epoch_iter = 0
-            model.reset_model_status()
-    
-            for i, data in enumerate(train_loader):
-                ttt+=1
-                
-                iter_start_time = time.time()
-                visualizer.reset()
-                total_steps += opt.batch_size
-                epoch_iter += opt.batch_size
-                model.set_input(data)
-    
-                model.backward_parameters()
-                if((i+1)%accumulation_steps)==0: #batchsize,gradient add
-                    
-                    model.optimize_parameters()
-                    model.optimize_zero()
-                    
-    
-                name1=str(int(data[0]['pid'][0]))
-                name2=str(int(data[0]['pid'][1]))
-    
-                if total_steps % opt.display_freq == 0:
-                    
-                    save_result = total_steps % opt.update_html_freq == 0
-                    visualizer.display_current_results(model.get_current_visuals(), epoch,name1,name2,ttt, save_result)
-    
-                #save_result = total_steps % opt.update_html_freq == 0
-                #visualizer.display_current_results(model.get_current_visuals(), epoch,name1,name2,ttt, save_result)
-    
-                if total_steps % opt.print_freq == 0:
-                    errors = model.get_current_errors()
-                    t = (time.time() - iter_start_time) / opt.batch_size
-                    visualizer.print_current_errors(epoch, epoch_iter, errors, t)
-                    if opt.display_id > 0:
-                        visualizer.plot_current_errors(epoch, float(epoch_iter)/dataset_size, opt, errors)
-    
-            if epoch % opt.save_step == 0:
-                print('saving the model at the end of epoch %d, iters %d' % (epoch, total_steps))
-                model.save(epoch)
-    
-            if epoch % opt.eval_step == 0 and opt.stage!=1:
-                mAP = evaluator.evaluate(test_loader, test_loader,dataset.query, dataset.gallery, top1=False)#,
-                is_best = mAP > best_mAP
-                best_mAP = max(mAP, best_mAP)
-                if is_best:
-                    model.save('best')
-                message = '\n * Finished epoch {:3d}  mAP: {:5.1%}  best: {:5.1%}{}\n'.format(epoch, mAP, best_mAP, ' *' if is_best else '')
-                visualizer.print_reid_results(message)
-    
-            print('End of epoch %d / %d \t Time Taken: %d sec' %
-                  (epoch, opt.niter + opt.niter_decay, time.time() - epoch_start_time))
-            model.update_learning_rate()
-    
-            # Final test
-        if opt.stage!=1:
-            print('Test with best model:')
-            checkpoint = load_checkpoint(osp.join(opt.checkpoints, opt.name, '%s_net_%s.pth' % ('best', 'E')))#('best', 'E')
-            model.net_E.load_state_dict(checkpoint)
-    
-            top1,mAP = evaluator.evaluate(test_loader, test_loader, dataset.query, dataset.gallery, dataset=opt.dataset)
-            message = '\n Test with best model:  mAP: {:5.1%}  top1: {:5.1%}\n'.format(mAP, top1)
+    for epoch in range(1, opt.niter + opt.niter_decay + 1):
+        epoch_start_time = time.time()
+        epoch_iter = 0
+        model.reset_model_status()
+
+        for i, data in enumerate(train_loader):
+            iter_start_time = time.time()
+            visualizer.reset()
+            total_steps += opt.batch_size
+            epoch_iter += opt.batch_size
+            model.set_input(data)
+            model.optimize_parameters()
+
+            if total_steps % opt.display_freq == 0:
+                save_result = total_steps % opt.update_html_freq == 0
+                visualizer.display_current_results(model.get_current_visuals(), epoch, save_result)
+
+            if total_steps % opt.print_freq == 0:
+                errors = model.get_current_errors()
+                t = (time.time() - iter_start_time) / opt.batch_size
+                visualizer.print_current_errors(epoch, epoch_iter, errors, t)
+                if opt.display_id > 0:
+                    visualizer.plot_current_errors(epoch, float(epoch_iter)/dataset_size, opt, errors)
+
+        if epoch % opt.save_step == 0:
+            print('saving the model at the end of epoch %d, iters %d' % (epoch, total_steps))
+            model.save(epoch)
+
+        if epoch % opt.eval_step == 0 and opt.stage!=1:
+            mAP = evaluator.evaluate(val_loader, dataset.val, dataset.val, top1=False)
+            is_best = mAP > best_mAP
+            best_mAP = max(mAP, best_mAP)
+            if is_best:
+                model.save('best')
+            message = '\n * Finished epoch {:3d}  mAP: {:5.1%}  best: {:5.1%}{}\n'.format(epoch, mAP, best_mAP, ' *' if is_best else '')
             visualizer.print_reid_results(message)
+
+        print('End of epoch %d / %d \t Time Taken: %d sec' %
+              (epoch, opt.niter + opt.niter_decay, time.time() - epoch_start_time))
+        model.update_learning_rate()
+
+    # Final test
+    if opt.stage!=1:
+        print('Test with best model:')
+        checkpoint = load_checkpoint(osp.join(opt.checkpoints, opt.name, '%s_net_%s.pth' % ('best', 'E')))
+        model.net_E.load_state_dict(checkpoint)
+        top1, mAP = evaluator.evaluate(test_loader, dataset.query, dataset.gallery, rerank_topk=100, dataset=opt.dataset)
+        message = '\n Test with best model:  mAP: {:5.1%}  top1: {:5.1%}\n'.format(mAP, top1)
+        visualizer.print_reid_results(message)
 
 if __name__ == '__main__':
     main()

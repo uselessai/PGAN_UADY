@@ -72,29 +72,11 @@ class Dataset(object):
         self.train, self.train_query = _pluck(identities, train_pids, relabel=True)
         self.val, self.val_query = _pluck(identities, val_pids, relabel=True)
         self.trainval, self.trainval_query = _pluck(identities, trainval_pids, relabel=True)
-        
-
         self.query, self.query_query = _pluck(identities, self.split['query'])
         self.gallery, self.gallery_query = _pluck(identities, self.split['gallery'])
         self.num_train_ids = len(train_pids)
         self.num_val_ids = len(val_pids)
         self.num_trainval_ids = len(trainval_pids)
-        #---------------------2018.11.19. xiaodui-------------------
-       # num_query=0.3
-       # test_pids=sorted(np.asarray(self.split['query']))
-       # test_num=len(test_pids)
-       # if isinstance(num_query,float):
-       #     num_query=int(round(test_num*num_query))
-       # if num_query>=test_num or num_query<0:
-        #    raise ValueError("num_query exceeds total identities{}".format(test_num))
-       # query_pids=sorted(test_pids[-num_query:])
-       # gallery_pids=sorted(test_pids[:-num_val])
-       # self.query, self.query_query = _pluck(identities, query_pids,relabel=True)
-       # self.gallery, self.gallery_query = _pluck(identities,gallery_pids,relabel=True)
-       # self.num_train_ids = len(train_pids)
-       # self.num_val_ids = len(val_pids)
-       # self.num_trainval_ids = len(trainval_pids)
-        #---------------------2018.11.19. xiaodui-------------------
 
         if verbose:
             print(self.__class__.__name__, "dataset loaded")

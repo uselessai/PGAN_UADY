@@ -19,8 +19,3 @@ def to_torch(ndarray):
         raise ValueError("Cannot convert {} to torch tensor"
                          .format(type(ndarray)))
     return ndarray
-
-# progress bar
-import os, sys
-sys.path.append(os.path.join(os.path.dirname(__file__), "progress"))
-from progress.bar import Bar as Bar
